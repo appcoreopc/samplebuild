@@ -1,0 +1,1 @@
+  isMasterOrReleasableBranch: $[or(eq(variables['Build.SourceBranch'], 'refs/heads/master'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'))]
