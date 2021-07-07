@@ -1,0 +1,45 @@
+parameters:
+  stageDependency: []
+  stageName: ''
+  subscription: ''
+
+stages:
+  - stage: ${{parameters.stageName}}
+    dependsOn: ${{parameters.stageDependency}}
+    condition: and(succeeded(), eq(variables.isMasterOrReleasableBranch, true))
+
+    jobs:
+      - job: package
+        displayName: Package Container
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: DownloadPipelineArtifact@1
+            inputs:
+              artifactName: ShopUI-PlutoImage
+              targetPath: $(Build.SourcesDirectory)/dist/apps/pluto/browser
+
+          - task: DownloadPipelineArtifact@1
+            inputs:
+              artifactName: ShopUI-PlutoSSRImage
+              targetPath: $(Build.SourcesDirectory)/dist/apps/pluto/server
+
+          - task: Docker@2
+            displayName: Build and push nginx (static) image
+            inputs:
+              command: buildAndPush
+              containerRegistry: $(DevContainerRegistry)
+              repository: $(ContainerRepository)
+              dockerfile: Dockerfile
+              tags: |
+                $(Build.BuildId)
+
+          - task: Docker@2
+            displayName: Build and push SSR (server) image
+            inputs:
+              command: buildAndPush
+              containerRegistry: $(DevContainerRegistry)
+              repository: $(SsrContainerRepository)
+              dockerfile: Dockerfile.ssr
+              tags: |
+                $(Build.BuildId)
