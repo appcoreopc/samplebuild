@@ -1,0 +1,171 @@
+parameters:
+  poolName: ''
+ 
+stages: 
+- stage : "Build"
+  pool:
+    name: ${{parameters.poolName}}
+    demands:
+      - npm
+      - msbuild
+      - visualstudio
+      - vstest 
+      
+  jobs:
+  - job: "buildingartifact"
+    workspace:
+      clean:  all
+    
+    steps:
+      - task: InlinePowershell@1
+        displayName: Update Patch Number
+        inputs:
+          Script: |
+            [String]$myrev = $Env:BUILD_BUILDNUMBER
+            $myrev = $myrev -replace ".{2}$"
+            $result = $myrev.Substring($myrev.LastIndexOf('.') + 1)
+            Write-Host ("##vso[task.setvariable variable=verPatch;]$result")
+            Write-Host ("##vso[task.setvariable variable=packageVersion;]$(verMajor).$(verMinor).$result.$(verHotfix)")
+        condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+
+      - task: InlinePowershell@1
+        displayName: Update Build Number
+        inputs:
+          Script: |
+            [String]$buildNumber = $Env:BUILD_BUILDNUMBER
+            $major,$minor,$patch,$hotfix = $buildNumber.Split('.')
+            Write-Host ("##vso[task.setvariable variable=verMajor;]$major")
+            Write-Host ("##vso[task.setvariable variable=verMinor;]$minor")
+            Write-Host ("##vso[task.setvariable variable=verPatch;]$patch")
+            Write-Host ("##vso[task.setvariable variable=verHotfix;]$hotfix")
+            Write-Host ("##vso[task.setvariable variable=packageVersion;]$major.$minor.$patch.$hotfix")
+          condition: and(contains(variables['build.sourceBranch'], 'refs/heads/release'), succeeded())
+
+      - task: Npm@1
+        displayName: "npm custom"
+        inputs:
+          command: custom
+          workingDir: OnlineShopping.WebSite/
+          verbose: false
+          customCommand: "ci --no-color"
+
+      - task: NuGetToolInstaller@0
+        displayName: "Use NuGet 5.2.0"
+        inputs:
+          versionSpec: 5.2.0
+
+      - task: NuGetCommand@2
+        displayName: "NuGet Restore"
+        inputs:
+          restoreSolution: Olympic.OnlineShopping.sln
+          feedsToUse: config
+          nugetConfigPath: NuGet.config
+   
+      - task: bool.update-assembly-info.update-assembly-info-task.update-assembly-info@2
+        displayName: 'Update Assembly: **\*AssemblyInfo.*'
+        inputs:
+          ensureAttribute: false
+          company: "Woolworths New Zealand"
+          product: OLS
+          fileVersionMajor: "$(verMajor)"
+          fileVersionMinor: "$(verMinor)"
+          fileVersionBuild: "$(verPatch)"
+          fileVersionRevision: "$(verHotfix)"
+          assemblyVersionMajor: "$(verMajor)"
+          assemblyVersionMinor: "$(verMinor)"
+          assemblyVersionBuild: "$(verPatch)"
+          assemblyVersionRevision: "$(verHotfix)"
+        condition: and(succeeded(), eq(variables['packagingEnabled'], 'true'))
+
+      - task: VSBuild@1
+        displayName: "Build Solution"
+        inputs:
+          solution: Olympic.OnlineShopping.sln
+          vsVersion: 16.0
+          msbuildArgs: "/Verbosity:Quiet"
+          platform: "$(BuildPlatform)"
+          configuration: "$(BuildConfiguration)"
+          maximumCpuCount: true
+
+      - task: BuildQualityChecks@7
+        inputs:
+          checkWarnings: true
+          warningFailOption: 'fixed'
+          warningThreshold: '490'
+          showStatistics: true
+
+      - task: VSTest@2
+        displayName: Tests
+        inputs:
+          testAssemblyVer2: |
+            **\*test*.dll
+            !**\*TestAdapter.dll
+            !**\obj\**
+            !**\*TestFramework*.dll
+            !**\*MSTestAdapter*.dll
+            !**\*TestPlatform*.dll
+            !**\OnlineShopping.Tests.Utilities.dll
+          testFiltercriteria: "TestCategory=Unit"
+          runOnlyImpactedTests: false
+          runInParallel: true
+          codeCoverageEnabled: false
+
+      - task: MSBuild@1
+        displayName: "(TC Task) Classic - Generate folder structure for packages"
+        inputs:
+          solution: package.msbuild.proj
+          msbuildArguments: '/p:WorkingFolder=$(Build.SourcesDirectory)\'
+        condition: and(succeeded(), eq(variables['packagingEnabled'], 'true'))
+
+      - task: octopusdeploy.octopus-deploy-build-release-tasks.octopus-pack.OctopusPack@3
+        displayName: "Package Countdown.OnlineShopping.Database"
+        inputs:
+          PackageId: Countdown.OnlineShopping.Database
+          PackageVersion: "$(packageVersion)"
+          SourcePath: '$(Build.SourcesDirectory)\_package\Octopus\Database'
+          OutputPath: "$(Build.ArtifactStagingDirectory)"
+          NuGetAuthor: "$(author)"
+          NuGetTitle: Countdown.OnlineShopping.Database
+          NuGetDescription: Countdown.OnlineShopping.Database
+        condition: and(succeeded(), eq(variables['packagingEnabled'], 'true'))
+
+      - task: octopusdeploy.octopus-deploy-build-release-tasks.octopus-pack.OctopusPack@3
+        displayName: "Package Countdown.OnlineShopping.OSIntegration.V7"
+        inputs:
+          PackageId: Countdown.OnlineShopping.OSIntegration.V7
+          PackageVersion: "$(packageVersion)"
+          SourcePath: '$(Build.SourcesDirectory)\_package\Octopus\OlympicSearchV7Integration'
+          OutputPath: "$(Build.ArtifactStagingDirectory)"
+          NuGetAuthor: "$(author)"
+          NuGetTitle: Countdown.OnlineShopping.OSIntegration.V7
+          NuGetDescription: Countdown.OnlineShopping.OSIntegration.V7
+        condition: and(succeeded(), eq(variables['packagingEnabled'], 'true'))
+
+      - task: octopusdeploy.octopus-deploy-build-release-tasks.octopus-pack.OctopusPack@3
+        displayName: "Package Countdown.OnlineShopping.WebSite"
+        inputs:
+          PackageId: Countdown.OnlineShopping.WebSite
+          PackageVersion: "$(packageVersion)"
+          SourcePath: '$(Build.SourcesDirectory)\_package\Octopus\Web'
+          OutputPath: "$(Build.ArtifactStagingDirectory)"
+          NuGetAuthor: "$(author)"
+          NuGetTitle: Countdown.OnlineShopping.WebSite
+          NuGetDescription: Countdown.OnlineShopping.WebSite
+        condition: and(succeeded(), eq(variables['packagingEnabled'], 'true'))
+
+      - task: NuGetCommand@2
+        displayName: "NuGet push"
+        inputs:
+          command: push
+          publishVstsFeed: "a991261f-a5d9-4a88-886b-ff501fcd0f44"
+        condition: and(succeeded(), eq(variables['packagingEnabled'], 'true'))
+
+      - task: PublishPipelineArtifact@1
+        displayName: 'Publish Artifact'
+        inputs:
+          artifactName: $(testArtifactName)
+          targetPath:  $(Build.SourcesDirectory)\$(SiteManagementTestProjectPath)
+        condition: and(succeeded(), eq(variables['packagingEnabled'], 'true'))
+
+      
+   
